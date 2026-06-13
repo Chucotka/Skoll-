@@ -1,0 +1,101 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoomType {
+  private
+  public
+}
+
+enum ParticipantRole {
+  host
+  guest
+  moderator
+}
+
+model User {
+  id               String   @id @default(cuid())
+  telegramId       String   @unique
+  username         String?
+  firstName        String?
+  lastName         String?
+  avatarUrl        String?
+  isAdultConfirmed Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  hostedRooms  Room[]            @relation("RoomHost")
+  participants RoomParticipant[]
+  toasts       Toast[]
+  reportsMade  Report[]          @relation("Reporter")
+  reportsGot   Report[]          @relation("Target")
+}
+
+model Room {
+  id         String   @id @default(cuid())
+  title      String
+  type       RoomType @default(private)
+  hostId     String
+  inviteCode String   @unique
+  theme      String?
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  host         User              @relation("RoomHost", fields: [hostId], references: [id], onDelete: Cascade)
+  participants RoomParticipant[]
+  toasts       Toast[]
+  games        GameSession[]
+  reports      Report[]
+}
+
+model RoomParticipant {
+  id       String          @id @default(cuid())
+  roomId   String
+  userId   String
+  role     ParticipantRole @default(guest)
+  joinedAt DateTime        @default(now())
+
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, userId])
+}
+
+model Toast {
+  id        String   @id @default(cuid())
+  roomId    String
+  userId    String
+  text      String
+  createdAt DateTime @default(now())
+
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model GameSession {
+  id              String   @id @default(cuid())
+  roomId          String
+  gameType        String
+  status          String   @default("active")
+  currentQuestion String?
+  createdAt       DateTime @default(now())
+
+  room Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+}
+
+model Report {
+  id           String   @id @default(cuid())
+  reporterId   String
+  targetUserId String
+  roomId       String?
+  reason       String
+  createdAt    DateTime @default(now())
+
+  reporter User  @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  target   User  @relation("Target", fields: [targetUserId], references: [id], onDelete: Cascade)
+  room     Room? @relation(fields: [roomId], references: [id], onDelete: SetNull)
+}

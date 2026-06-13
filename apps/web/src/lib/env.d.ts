@@ -1,0 +1,7 @@
+interface ImportMetaEnv {
+  readonly VITE_SERVER_URL?: string;
+  readonly VITE_BOT_USERNAME?: string;
+}
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
