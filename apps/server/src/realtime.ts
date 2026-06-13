@@ -3,11 +3,15 @@ import { Server as IOServer, Socket } from 'socket.io';
 import {
   SocketClientEvents,
   SocketServerEvents,
+  type GameAnswerPayload,
   type GameNextPayload,
   type GameStartPayload,
   type RoomJoinPayload,
   type ToastSendPayload,
   type TypingPayload,
+  type WebrtcJoinPayload,
+  type WebrtcPeer,
+  type WebrtcSignalClientPayload,
 } from '@toastup/shared';
 import { corsOrigins } from './env.js';
 import { verifyToken } from './utils/jwt.js';
@@ -21,6 +25,31 @@ let io: IOServer | null = null;
 interface SocketData {
   userId: string;
   telegramId: string;
+  name: string;
+}
+
+/* ------------------- Interactive mini-game answer store -------------------- */
+// In-memory per-game answers. Cleared whenever the question changes.
+interface GameAnswerState {
+  question: string;
+  answers: Map<string, { name: string; answer: string }>;
+}
+const gameAnswers = new Map<string, GameAnswerState>();
+
+/** Reset (or initialise) the collected answers for a game's current question. */
+export function resetGameAnswers(gameId: string, question: string) {
+  gameAnswers.set(gameId, { question, answers: new Map() });
+}
+
+function gameAnswersPayload(gameId: string) {
+  const state = gameAnswers.get(gameId);
+  return {
+    gameId,
+    question: state?.question ?? '',
+    answers: state
+      ? [...state.answers.entries()].map(([userId, v]) => ({ userId, name: v.name, answer: v.answer }))
+      : [],
+  };
 }
 
 export function initRealtime(server: HttpServer): IOServer {
@@ -28,7 +57,7 @@ export function initRealtime(server: HttpServer): IOServer {
     cors: { origin: corsOrigins, credentials: true },
   });
 
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const token =
       (socket.handshake.auth?.token as string | undefined) ||
       (socket.handshake.headers.authorization?.replace('Bearer ', '') ?? '');
@@ -36,7 +65,13 @@ export function initRealtime(server: HttpServer): IOServer {
     if (!payload) {
       return next(new Error('Unauthorized'));
     }
-    (socket.data as SocketData) = { userId: payload.userId, telegramId: payload.telegramId };
+    const user = await prisma.user.findUnique({ where: { id: payload.userId } });
+    if (!user) return next(new Error('Unauthorized'));
+    (socket.data as SocketData) = {
+      userId: payload.userId,
+      telegramId: payload.telegramId,
+      name: user.firstName || user.username || 'Guest',
+    };
     next();
   });
 
@@ -51,6 +86,10 @@ export function getIO(): IOServer {
 
 function roomChannel(roomId: string): string {
   return `room:${roomId}`;
+}
+
+function videoChannel(roomId: string): string {
+  return `video:${roomId}`;
 }
 
 async function isParticipant(roomId: string, userId: string): Promise<boolean> {
@@ -155,12 +194,14 @@ function registerHandlers(socket: Socket) {
       const game = await prisma.gameSession.create({
         data: { roomId, gameType, status: 'active', currentQuestion: question },
       });
+      resetGameAnswers(game.id, question);
       getIO().to(roomChannel(roomId)).emit(SocketServerEvents.GameStarted, toGameDTO(game));
       getIO().to(roomChannel(roomId)).emit(SocketServerEvents.GameQuestion, {
         roomId,
         gameId: game.id,
         question,
       });
+      getIO().to(roomChannel(roomId)).emit(SocketServerEvents.GameAnswers, gameAnswersPayload(game.id));
     } catch {
       socket.emit(SocketServerEvents.Error, { message: 'Failed to start game' });
     }
@@ -180,11 +221,13 @@ function registerHandlers(socket: Socket) {
         where: { id: game.id },
         data: { currentQuestion: question },
       });
+      resetGameAnswers(updated.id, question);
       getIO().to(roomChannel(roomId)).emit(SocketServerEvents.GameQuestion, {
         roomId,
         gameId: updated.id,
         question,
       });
+      getIO().to(roomChannel(roomId)).emit(SocketServerEvents.GameAnswers, gameAnswersPayload(updated.id));
     } catch {
       socket.emit(SocketServerEvents.Error, { message: 'Failed to advance game' });
     }
@@ -198,6 +241,80 @@ function registerHandlers(socket: Socket) {
       userId: data.userId,
       isTyping: !!isTyping,
     });
+  });
+
+  // ---- Interactive mini-game answers / votes ----
+  socket.on(SocketClientEvents.GameAnswer, async (payload: GameAnswerPayload) => {
+    try {
+      const { roomId, gameId, answer } = payload || {};
+      if (!roomId || !gameId || !(await isParticipant(roomId, data.userId))) return;
+      const text = (answer ?? '').toString().trim().slice(0, 200);
+      if (!text) return;
+      let state = gameAnswers.get(gameId);
+      if (!state) {
+        const game = await prisma.gameSession.findUnique({ where: { id: gameId } });
+        state = { question: game?.currentQuestion ?? '', answers: new Map() };
+        gameAnswers.set(gameId, state);
+      }
+      state.answers.set(data.userId, { name: data.name, answer: text });
+      getIO().to(roomChannel(roomId)).emit(SocketServerEvents.GameAnswers, gameAnswersPayload(gameId));
+    } catch {
+      socket.emit(SocketServerEvents.Error, { message: 'Failed to submit answer' });
+    }
+  });
+
+  // ---- Video call (WebRTC) signaling ----
+  socket.on(SocketClientEvents.WebrtcJoin, async (payload: WebrtcJoinPayload) => {
+    try {
+      const { roomId } = payload || {};
+      if (!roomId || !(await isParticipant(roomId, data.userId))) {
+        return socket.emit(SocketServerEvents.Error, { message: 'Not a participant of this room' });
+      }
+      const channel = videoChannel(roomId);
+      const existing = await getIO().in(channel).fetchSockets();
+      const peers: WebrtcPeer[] = existing
+        .filter((s) => s.id !== socket.id)
+        .map((s) => {
+          const d = s.data as SocketData;
+          return { socketId: s.id, userId: d.userId, name: d.name };
+        });
+
+      await socket.join(channel);
+      // Tell the newcomer who is already in the call.
+      socket.emit(SocketServerEvents.WebrtcPeers, { roomId, peers });
+      // Tell everyone else a new peer is here.
+      socket.to(channel).emit(SocketServerEvents.WebrtcPeerJoined, {
+        roomId,
+        peer: { socketId: socket.id, userId: data.userId, name: data.name } satisfies WebrtcPeer,
+      });
+    } catch {
+      socket.emit(SocketServerEvents.Error, { message: 'Failed to join video call' });
+    }
+  });
+
+  socket.on(SocketClientEvents.WebrtcSignal, (payload: WebrtcSignalClientPayload) => {
+    const { to, data: signal } = payload || {};
+    if (!to) return;
+    getIO().to(to).emit(SocketServerEvents.WebrtcSignal, {
+      from: socket.id,
+      fromUserId: data.userId,
+      data: signal,
+    });
+  });
+
+  socket.on(SocketClientEvents.WebrtcLeave, (payload: { roomId: string }) => {
+    const { roomId } = payload || {};
+    if (!roomId) return;
+    socket.leave(videoChannel(roomId));
+    socket.to(videoChannel(roomId)).emit(SocketServerEvents.WebrtcPeerLeft, { socketId: socket.id });
+  });
+
+  socket.on('disconnecting', () => {
+    for (const room of socket.rooms) {
+      if (room.startsWith('video:')) {
+        socket.to(room).emit(SocketServerEvents.WebrtcPeerLeft, { socketId: socket.id });
+      }
+    }
   });
 }
 

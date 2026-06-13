@@ -5,7 +5,7 @@ import { startGameSchema } from '../validation/schemas.js';
 import { getRandomQuestion, isGameType } from '../services/gameService.js';
 import { toGameDTO } from '../utils/mappers.js';
 import { HttpError } from '../middleware/errorHandler.js';
-import { getIO } from '../realtime.js';
+import { getIO, resetGameAnswers } from '../realtime.js';
 import { SocketServerEvents } from '@toastup/shared';
 
 export const gameRouter = Router({ mergeParams: true });
@@ -47,9 +47,11 @@ gameRouter.post('/start', async (req, res, next) => {
       data: { roomId, gameType, status: 'active', currentQuestion: question },
     });
 
+    resetGameAnswers(game.id, question);
     const dto = toGameDTO(game);
     broadcast(roomId, SocketServerEvents.GameStarted, dto);
     broadcast(roomId, SocketServerEvents.GameQuestion, { roomId, gameId: game.id, question });
+    broadcast(roomId, SocketServerEvents.GameAnswers, { gameId: game.id, question, answers: [] });
     res.status(201).json({ game: dto });
   } catch (err) {
     next(err);
@@ -75,8 +77,10 @@ gameRouter.post('/next', async (req, res, next) => {
       data: { currentQuestion: question },
     });
 
+    resetGameAnswers(updated.id, question);
     const dto = toGameDTO(updated);
     broadcast(roomId, SocketServerEvents.GameQuestion, { roomId, gameId: updated.id, question });
+    broadcast(roomId, SocketServerEvents.GameAnswers, { gameId: updated.id, question, answers: [] });
     res.json({ game: dto });
   } catch (err) {
     next(err);

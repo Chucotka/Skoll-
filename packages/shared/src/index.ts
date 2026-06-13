@@ -91,7 +91,12 @@ export const SocketClientEvents = {
   ToastCountdown: 'toast:countdown',
   GameStart: 'game:start',
   GameNext: 'game:next',
+  GameAnswer: 'game:answer',
   ParticipantTyping: 'participant:typing',
+  // Video call (WebRTC) signaling
+  WebrtcJoin: 'webrtc:join',
+  WebrtcLeave: 'webrtc:leave',
+  WebrtcSignal: 'webrtc:signal',
 } as const;
 
 export const SocketServerEvents = {
@@ -101,9 +106,15 @@ export const SocketServerEvents = {
   ToastCountdownUpdate: 'toast:countdown:update',
   GameStarted: 'game:started',
   GameQuestion: 'game:question',
+  GameAnswers: 'game:answers',
   RoomUpdate: 'room:update',
   ParticipantTyping: 'participant:typing',
   Error: 'error',
+  // Video call (WebRTC) signaling
+  WebrtcPeers: 'webrtc:peers',
+  WebrtcPeerJoined: 'webrtc:peer-joined',
+  WebrtcPeerLeft: 'webrtc:peer-left',
+  WebrtcSignal: 'webrtc:signal',
 } as const;
 
 export interface RoomJoinPayload {
@@ -128,6 +139,58 @@ export interface TypingPayload {
   roomId: string;
   isTyping: boolean;
 }
+
+/* ----------------------- Interactive mini-game answers ---------------------- */
+
+export interface GameAnswerPayload {
+  roomId: string;
+  gameId: string;
+  /** A free-text answer, or a target userId when voting in "Who is most likely to?". */
+  answer: string;
+}
+
+export interface GameAnswerDTO {
+  userId: string;
+  name: string;
+  answer: string;
+}
+
+export interface GameAnswersUpdate {
+  gameId: string;
+  question: string;
+  answers: GameAnswerDTO[];
+}
+
+/* ------------------------------ WebRTC signaling ---------------------------- */
+
+export interface WebrtcPeer {
+  socketId: string;
+  userId: string;
+  name: string;
+}
+
+/** Client -> server: relay an SDP/ICE message to a specific peer socket. */
+export interface WebrtcSignalClientPayload {
+  to: string;
+  data: unknown;
+}
+
+/** Server -> client: a relayed SDP/ICE message from a peer socket. */
+export interface WebrtcSignalServerPayload {
+  from: string;
+  fromUserId: string;
+  data: unknown;
+}
+
+export interface WebrtcJoinPayload {
+  roomId: string;
+  name: string;
+}
+
+export const STUN_SERVERS = [
+  'stun:stun.l.google.com:19302',
+  'stun:stun1.l.google.com:19302',
+];
 
 /* --------------------------------- Content -------------------------------- */
 

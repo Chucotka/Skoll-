@@ -3,6 +3,8 @@ import {
   GAME_LABELS,
   SocketClientEvents,
   SocketServerEvents,
+  type GameAnswerDTO,
+  type GameAnswersUpdate,
   type GameType,
   type ParticipantDTO,
   type RoomDTO,
@@ -14,6 +16,7 @@ import { connectSocket } from '../lib/socket';
 import { haptic, getWebApp } from '../lib/telegram';
 import ToastModal from '../components/ToastModal';
 import MiniGames from '../components/MiniGames';
+import VideoCall from '../components/VideoCall';
 
 const BOT_USERNAME = import.meta.env.VITE_BOT_USERNAME ?? '';
 
@@ -39,11 +42,14 @@ export default function Room() {
 
   const [toastOpen, setToastOpen] = useState(false);
   const [gamesOpen, setGamesOpen] = useState(false);
+  const [videoOpen, setVideoOpen] = useState(false);
   const [cheers, setCheers] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
 
+  const [gameId, setGameId] = useState<string | null>(null);
   const [gameQuestion, setGameQuestion] = useState<string | null>(null);
   const [gameType, setGameType] = useState<GameType | null>(null);
+  const [gameAnswers, setGameAnswers] = useState<GameAnswerDTO[]>([]);
 
   const feedRef = useRef<HTMLDivElement>(null);
 
@@ -120,13 +126,20 @@ export default function Room() {
       SocketServerEvents.ToastCountdownUpdate,
       (data: { seconds: number }) => startCountdown(data.seconds),
     );
-    socket.on(SocketServerEvents.GameStarted, (g: { gameType: GameType }) => {
+    socket.on(SocketServerEvents.GameStarted, (g: { id: string; gameType: GameType }) => {
       setGameType(g.gameType);
+      setGameId(g.id);
+      setGameAnswers([]);
       pushFeed({ kind: 'game', text: `Game started: ${GAME_LABELS[g.gameType]?.label ?? g.gameType}` });
     });
-    socket.on(SocketServerEvents.GameQuestion, (data: { question: string }) => {
+    socket.on(SocketServerEvents.GameQuestion, (data: { gameId: string; question: string }) => {
+      setGameId(data.gameId);
       setGameQuestion(data.question);
+      setGameAnswers([]);
       pushFeed({ kind: 'game', text: data.question });
+    });
+    socket.on(SocketServerEvents.GameAnswers, (data: GameAnswersUpdate) => {
+      setGameAnswers(data.answers);
     });
     socket.on(SocketServerEvents.Error, (e: { message?: string }) => {
       if (e?.message) setError(e.message);
@@ -143,6 +156,7 @@ export default function Room() {
       socket.off(SocketServerEvents.ToastCountdownUpdate);
       socket.off(SocketServerEvents.GameStarted);
       socket.off(SocketServerEvents.GameQuestion);
+      socket.off(SocketServerEvents.GameAnswers);
       socket.off(SocketServerEvents.Error);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -175,6 +189,12 @@ export default function Room() {
   function sharedToast() {
     const socket = connectSocket();
     socket.emit(SocketClientEvents.ToastCountdown, { roomId: currentRoomId, seconds: 3 });
+  }
+
+  function submitGameAnswer(answer: string) {
+    if (!currentRoomId || !gameId) return;
+    const socket = connectSocket();
+    socket.emit(SocketClientEvents.GameAnswer, { roomId: currentRoomId, gameId, answer });
   }
 
   async function leave() {
@@ -294,6 +314,10 @@ export default function Room() {
         ))}
       </div>
 
+      {room && (
+        <VideoCall roomId={room.id} displayName={user?.firstName || user?.username || 'You'} visible={videoOpen} />
+      )}
+
       <div ref={feedRef} className="flex-1 space-y-2 overflow-y-auto px-4 pb-2">
         {feed.length === 0 && (
           <p className="mt-8 text-center text-white/30">
@@ -330,9 +354,15 @@ export default function Room() {
         >
           🥂 Raise a Toast
         </button>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-4 gap-2">
           <button className="btn-ghost text-sm" onClick={() => setToastOpen(true)}>
-            ✨ AI Host
+            ✨ AI
+          </button>
+          <button
+            className={`btn-ghost text-sm ${videoOpen ? 'ring-2 ring-gold-500' : ''}`}
+            onClick={() => setVideoOpen((v) => !v)}
+          >
+            📹 Video
           </button>
           <button className="btn-ghost text-sm" onClick={() => setGamesOpen(true)}>
             🎲 Games
@@ -350,8 +380,12 @@ export default function Room() {
       {gamesOpen && (
         <MiniGames
           roomId={room.id}
+          gameId={gameId}
           currentQuestion={gameQuestion}
           currentGameType={gameType}
+          participants={participants}
+          answers={gameAnswers}
+          onSubmitAnswer={submitGameAnswer}
           onClose={() => setGamesOpen(false)}
         />
       )}
