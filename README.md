@@ -130,6 +130,24 @@ Then send `/start` to your bot and tap **Open ToastUp**.
 
 ---
 
+## Video calls & interactive mini-games
+
+- **Video calls:** Each room has a 📹 **Video** panel. Tapping **Join Video Call** starts a mesh
+  WebRTC call (peer-to-peer) using Socket.IO for signaling (`webrtc:join` / `webrtc:signal` /
+  `webrtc:peer-joined` / `webrtc:peer-left`) and Google STUN servers. Mic/camera toggles and a
+  per-tile camera-off state are included. Mesh topology keeps it simple and is well-suited to small
+  evening rooms.
+- **Interactive online mini-games:** Games are now multiplayer in realtime. Everyone in the room
+  sees the same question and submits answers/votes (`game:answer`), and the server broadcasts the
+  aggregated **Live answers** to all participants (`game:answers`):
+  - _Who is most likely to?_ — tap a participant to vote; live vote tallies per person.
+  - _Truth or Story_ — share a short answer that everyone sees.
+  - _Toast Card_ — mark that you read your card aloud.
+  Advancing with **Next question** resets answers for everyone.
+
+> Browsers only allow `getUserMedia` (camera/mic) on `localhost` or **HTTPS**. Inside Telegram the
+> Mini App is already served over HTTPS; for local non-Telegram testing use `http://localhost:5173`.
+
 ## Bot commands
 
 - `/start` — greeting, product intro, **Open ToastUp** / **Create Room** buttons (supports deep

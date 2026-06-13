@@ -52,3 +52,12 @@ Non-obvious gotchas:
   opens Mini Apps over HTTPS, so testing the *bot's* WebApp button requires a public HTTPS tunnel to
   port 5173; the web app itself is fully testable over plain `http://localhost:5173`.
 - Prisma client generates into the root `node_modules/@prisma/client` (hoisted by workspaces).
+- Video calls use mesh WebRTC with Socket.IO signaling; mini-games are realtime/multiplayer
+  (votes/answers broadcast via `game:answer` -> `game:answers`). The in-memory game-answer store
+  lives in `apps/server/src/realtime.ts` and is cleared on each new question, so a server restart
+  drops in-flight answers (expected for the MVP).
+- Testing video locally without a real webcam: the headless VM has no camera, so launch Chrome with
+  `--use-fake-device-for-media-stream --use-fake-ui-for-media-stream` to get a synthetic video
+  stream (two instances with separate `--user-data-dir` = two distinct dev users for a 2-peer call).
+  computerUse's own Chrome does not run with these flags, so use a scripted Chrome (e.g. Puppeteer)
+  for end-to-end video verification.
